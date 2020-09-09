@@ -1,0 +1,270 @@
+---
+title: "Animated and Interactive Visualization on Covid 19 Data"
+author: "Shuyu Sui"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+        html_document:
+                code_folding: hide
+---
+
+As the COVID-19 situation continue to impact our normal life, there are more and more discussion about our reaction to the virus and what we need to do as the virus becomes a new normal. Considering that fact that the virus is highly contagious with R0 possibly be 5.7(Sanche S, Lin YT & et al., 2020), we need to look back to the limited history data we have to better understand the spread.
+
+While we know from some researches (Zhou, F., Yu, T., Du, R. & et al., 2020) that the virus impact senior citizens with underlying health conditions more severely, we see many cases where young adults could also be severely hit by this disease. 
+
+In this analysis, we try to look at the data from different countries first. And then we took a closer look at data from US and try to understand some basic facts about the virus.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(gganimate)
+library(transformr)
+library(gifski)
+library(shiny)
+library(ggplot2)
+library(plotly)
+covid_cases <- read_csv("countries-aggregated_csv.csv")
+us_cases <- read_csv("us_confirmed.csv")
+us_deaths <- read_csv("us_deaths.csv")
+```
+
+
+```{r}
+covid_cases$Date <- as.Date(covid_cases$Date)
+
+covid_rank<- covid_cases %>%
+  group_by(Date) %>%
+  mutate(Rank = rank(-Confirmed, ties.method = "first")) %>%
+  filter(Rank <= 10) %>%
+  filter(Date > '2020-01-24') %>%
+  droplevels() %>%
+  ungroup()
+  
+
+
+covid_test <- covid_rank %>% filter(Date == '2020-03-01')
+```
+
+## Animated Barplot by Country
+
+First we take a look at how number of cases changes through time in different countries. As we can see from the below animation, China is the first country being hit by the virus. And towards end of Feburary we see South Korea and Italy cases surged. European countries got impacted most badly during March. And US cases rocketed from mid-March till now.
+
+
+```{r, warning=FALSE}
+statplot = ggplot(covid_rank, aes(Rank, group=Country, 
+                                  fill = Country, color = Country)) +
+  geom_tile(aes(y = Confirmed/2,
+                height = Confirmed,
+                width = 0.9), alpha = 0.8, color = NA)+
+    geom_text(aes(y = 0, label = paste(Country, " ")), vjust = 0.2, hjust = 1) +
+  geom_text(aes(y=Confirmed,label = Confirmed, hjust=0)) +
+  coord_flip(clip = "off", expand = FALSE) + 
+  scale_y_continuous(labels = scales::comma) +
+  scale_x_reverse() +
+   theme(axis.line=element_blank(),
+        axis.text.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks=element_blank(),
+        axis.title.x=element_blank(),
+         axis.title.y=element_blank(),
+        legend.position="none",
+panel.background=element_blank(),
+        panel.border=element_blank(),
+        panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(),
+        panel.grid.major.x = element_line( size=.1, color="grey" ),
+        panel.grid.minor.x = element_line( size=.1, color="grey" ),
+        plot.title=element_text(size=25, hjust=0.5, face="bold", colour="grey", vjust=-1),
+        plot.subtitle=element_text(size=15, hjust=0.5, face="italic", color="grey"),
+        plot.caption =element_text(size=8, hjust=0.5, face="italic", color="grey"),
+        plot.background=element_blank(),
+       plot.margin = margin(1,1, 2, 2, "cm"))
+
+
+anim <- statplot + transition_states(Date, transition_length = 4, state_length = 1) +
+  enter_fly() +
+  view_follow(fixed_x = TRUE)  +
+  labs(title = 'Confirmed Cases : {closest_state}',  
+       subtitle  =  "Top 10 Countries",
+       caption  = "Confirmed cases COVID19")
+
+animate(anim,200,
+        renderer=gifski_renderer(file = tempfile(fileext = ".gif"), 
+                                 loop = TRUE,
+                                 width = 1200, height = 800)
+        )
+```
+
+## Animated Point Plot for New York
+
+After taking a look at the whole world's situation, we focus our analysis more on the US. Currently New York State has the most cases inside the U.S. so we animated how cases changed from the beginning of March. To be more specific, we plotted confirmed cases per capita and death rate per capita. 
+
+As we can see from the points, at first the cases follows almost an exponential trend. And as more cases accumulated, we also notice an increase in death tolls.
+
+
+```{r}
+
+us_cases <- rename(us_cases, c("State" = "Province/State"))
+us_deaths <- rename(us_deaths, c("State" = "Province/State", "Deaths" = "Case"))
+us_cases$State <- str_trim(us_cases$State)
+us_deaths$State <- str_trim(us_deaths$State)
+
+us_state_case <- us_cases %>% filter(Date > "2020-03-01") %>%
+  group_by(Date,State) %>%
+  summarise(Confirmed = sum(Case)) %>%
+    ungroup()
+
+us_state_death <- us_deaths %>% filter(Date > "2020-03-01") %>%
+  group_by(Date,State) %>%
+  summarise(Death = sum(Deaths), Pop = sum(Population)) %>%
+    ungroup()
+
+state_combine <- us_state_case %>% 
+  select(Date, Confirmed, State) %>%
+  inner_join(us_state_death, by = c("Date" = "Date", "State" = "State")) %>%
+  filter(Date > "2020-04-01") %>%
+  filter(Pop >0) 
+
+
+state_combine$CasePercap <- state_combine$Confirmed/state_combine$Pop
+state_combine$DeathPercap <- state_combine$Death/state_combine$Pop
+```
+
+
+
+
+```{r, warning=FALSE}
+anim1 <- ggplot(state_combine%>% filter(State == "New York"), aes(CasePercap, DeathPercap)) +
+  geom_point(alpha = 0.7, show.legend = FALSE) +
+  scale_size(range = c(2, 12))  +
+  # Here comes the gganimate specific bits
+  labs(title = 'Date: {frame_time}', x = 'Death', y = 'Confirmed') +
+  transition_time(Date) +
+  enter_fade()+
+  enter_grow()+
+  exit_fade() +
+  shadow_trail(size=4,alpha=.5,colour="Purple")+
+  ease_aes('linear')
+
+anim1
+```
+
+## Animated Point Plot for Top 10 States
+
+We then plotted the top 10 state for each day and animate the plots through time. As we can see from the plots, Washington state and California were leading in cases and deaths. But as time went by, New York quickly surpassed these two states, and we also notice some worrisome signs for Florida and Texas towards more recent days.
+
+
+
+```{r}
+state_rank <- state_combine %>%
+  group_by(Date) %>%
+  mutate(Rank = rank(-Confirmed, ties.method = "first")) %>%
+  filter(Rank <= 10) %>%
+  filter(Date > '2020-03-01') %>%
+  droplevels() %>%
+  ungroup()
+
+```
+
+
+
+
+
+
+```{r, warning=FALSE}
+anim2 <- ggplot(state_rank, aes(CasePercap, DeathPercap, size = Pop, color = State)) +
+  geom_point(alpha = 0.7, show.legend = TRUE) +
+  scale_size(range = c(1, 10)) +
+  # Here comes the gganimate specific bits
+  labs(title = 'State with Most Cases Date: {frame_time}', x = 'Death Per Capita', y = 'Confirmed Per Capita') +
+  transition_time(Date) +
+  enter_fly()+
+  enter_grow()+
+  exit_fly() +
+  ease_aes('linear')
+
+anim2
+```
+
+
+
+```{r}
+state_combine_new <- us_state_case %>% 
+  select(Date, Confirmed, State) %>%
+  inner_join(us_state_death, by = c("Date" = "Date", "State" = "State")) %>%
+  filter(Date > "2020-03-15") %>%
+  filter(Pop >0) 
+```
+
+## Dashboard on Cases and Deaths by State(see seperate shiny file)
+
+Finally, I present the dashboard which can help us take a deeper dive into each state. As we mentioned before, each state has different situations. 
+
+For example we see Michigan cases surged in early April, while Florida seems to be increasing steadily. It is still very hard to know what is the best strategy towards this virus, but hopefully we can soon find cure or vaccine to defeat this disease.
+
+See the App here(Server is pretty small and might need to refresh for few times) https://sophiarora.shinyapps.io/ShinyApp_COVID10/ 
+
+```{r, echo=FALSE}
+mylist <-as.list(as.vector(unique(state_combine_new$State)))
+names(mylist) <- as.vector(unique(state_combine_new$State))
+
+
+ui2 <- fluidPage(
+  titlePanel("Cases by state"),
+  
+  
+   mainPanel(
+      plotOutput("covidPlot")  
+    ),
+  sidebarPanel(
+    selectInput('st', 'State:', choices=mylist, selected = "New York"),
+      hr(),
+      helpText("Covid-19 Data.")
+  ),
+
+  
+
+  fluidRow(
+    column(3,
+      h4("Date Explorer"),
+      dateRangeInput("date", "Dates:",
+                  start = min(state_combine_new$Date), end =max(state_combine_new$Date))
+    ),
+    column(4,
+           radioButtons("variable"
+                              , "Variables to show:"
+                              ,c("Confirmed case" = 'Confirmed',
+                       "Death" = 'Death')
+                       , selected = "Confirmed"),
+      )
+))
+
+
+
+server<- function(input, output) {
+  dataset<-reactive({state_combine_new %>% filter(State==input$st) %>%
+      filter(Date >= input$date[1] & Date <= input$date[2])})
+  # Fill in the spot we created for a plot
+  
+  output$covidPlot <- renderPlot({
+    
+    # Render a barplot
+   ggplot(dataset(),aes_string(x = 'Date'
+                               , y = input$variable
+                               , label = input$variable)) + 
+      geom_point(color = 'cyan3', size = 5, alpha = 0.7) +
+      geom_line() +
+      geom_text(hjust = 1)
+  })
+}
+
+shinyApp(ui2, server)
+```
+
+# Reference
+
+1. Data retrieved from https://datahub.io/core/covid-19. This data is sourced from Johns Hopkins University Center for Systems Science and Engineering.
+
+2. Sanche S, Lin YT, Xu C, Romero-Severson E, Hengartner N, Ke R. High contagiousness and rapid spread of severe acute respiratory syndrome coronavirus 2. Emerg Infect Dis. 2020 Jul. https://doi.org/10.3201/eid2607.200282
+
+3.Zhou, F., Yu, T., Du, R., Fan, G., Liu, Y., Liu, Z., … Cao, B. (2020). Clinical course and risk factors for mortality of adult inpatients with COVID-19 in Wuhan, China: a retrospective cohort study. The Lancet, 395(10229), 1054–1062. doi: 10.1016/s0140-6736(20)30566-3
+
